@@ -15,8 +15,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = "@Netizenshop"
 ADMIN_ID = 707131428
 
-TEMPLATE_FILE = "template.html"
-MESSAGE_FILE = "message.json"
+TEMPLATES_DIR = "templates"
+MESSAGES_FILE = "messages.json"
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -30,30 +30,52 @@ def is_admin(message: Message):
     return message.from_user and message.from_user.id == ADMIN_ID
 
 
-def save_template(text):
-    with open(TEMPLATE_FILE, "w", encoding="utf-8") as f:
+def ensure_dirs():
+    os.makedirs(TEMPLATES_DIR, exist_ok=True)
+
+
+def template_path(name):
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "", name)
+    return os.path.join(TEMPLATES_DIR, f"{safe_name}.html")
+
+
+def save_template(name, text):
+    ensure_dirs()
+    with open(template_path(name), "w", encoding="utf-8") as f:
         f.write(text)
 
 
-def load_template():
-    if not os.path.exists(TEMPLATE_FILE):
+def load_template(name):
+    path = template_path(name)
+    if not os.path.exists(path):
         return None
 
-    with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 
-def save_message_id(message_id):
-    with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
-        json.dump({"message_id": message_id}, f)
-
-
-def load_message_id():
+def load_messages():
     try:
-        with open(MESSAGE_FILE, "r", encoding="utf-8") as f:
-            return json.load(f).get("message_id")
+        with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
-        return None
+        return {}
+
+
+def save_messages(data):
+    with open(MESSAGES_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def get_message_id(name):
+    data = load_messages()
+    return data.get(name)
+
+
+def save_message_id(name, message_id):
+    data = load_messages()
+    data[name] = message_id
+    save_messages(data)
 
 
 def format_price(value):
@@ -70,8 +92,8 @@ def format_price(value):
     return f"{int(value):,}".replace(",", ".") + "₽"
 
 
-async def publish_to_channel(text):
-    message_id = load_message_id()
+async def publish_to_channel(name, text):
+    message_id = get_message_id(name)
 
     if message_id:
         try:
@@ -91,7 +113,7 @@ async def publish_to_channel(text):
         parse_mode=ParseMode.HTML
     )
 
-    save_message_id(msg.message_id)
+    save_message_id(name, msg.message_id)
 
 
 @dp.message(Command("start"))
@@ -99,10 +121,11 @@ async def start(message: Message):
     await message.answer(
         "Бот работает ✅\n\n"
         "Команды:\n"
-        "/template + текст — сохранить шаблон\n"
-        "/prices — обновить цены пачкой\n"
-        "/show — показать шаблон\n"
-        "/update — обновить канал\n"
+        "/template имя + текст — сохранить шаблон\n"
+        "/update имя — обновить пост\n"
+        "/prices имя — обновить цены\n"
+        "/show имя — показать шаблон\n"
+        "/templates — список шаблонов\n"
         "/myid"
     )
 
@@ -120,13 +143,48 @@ async def set_template(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    text = message.html_text.replace("/template", "", 1).strip()
+    raw = message.text.replace("/template", "", 1).strip()
 
-    if not text:
-        return await message.answer("Пришли текст после команды /template")
+    if not raw:
+        return await message.answer(
+            "Формат:\n\n"
+            "/template iphone17\n"
+            "твой прайс"
+        )
 
-    save_template(text)
-    await message.answer("Шаблон сохранён ✅")
+    lines = raw.splitlines()
+    name = lines[0].strip()
+
+    text = "\n".join(lines[1:]).strip()
+
+    if not name or not text:
+        return await message.answer(
+            "Формат:\n\n"
+            "/template iphone17\n"
+            "твой прайс"
+        )
+
+    save_template(name, text)
+    await message.answer(f"Шаблон <code>{name}</code> сохранён ✅")
+
+
+@dp.message(Command("update"))
+async def update_template(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    name = message.text.replace("/update", "", 1).strip()
+
+    if not name:
+        return await message.answer("Формат: /update iphone17")
+
+    template = load_template(name)
+
+    if not template:
+        return await message.answer("Такой шаблон не найден.")
+
+    await publish_to_channel(name, template)
+    await message.answer(f"Пост <code>{name}</code> обновлён ✅")
 
 
 @dp.message(Command("show"))
@@ -134,26 +192,36 @@ async def show_template(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    template = load_template()
+    name = message.text.replace("/show", "", 1).strip()
+
+    if not name:
+        return await message.answer("Формат: /show iphone17")
+
+    template = load_template(name)
 
     if not template:
-        return await message.answer("Шаблон ещё не сохранён.")
+        return await message.answer("Такой шаблон не найден.")
 
     await message.answer(template, parse_mode=ParseMode.HTML)
 
 
-@dp.message(Command("update"))
-async def update_channel(message: Message):
+@dp.message(Command("templates"))
+async def templates_list(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    template = load_template()
+    ensure_dirs()
 
-    if not template:
-        return await message.answer("Сначала сохрани шаблон через /template.")
+    files = [
+        f.replace(".html", "")
+        for f in os.listdir(TEMPLATES_DIR)
+        if f.endswith(".html")
+    ]
 
-    await publish_to_channel(template)
-    await message.answer("Канал обновлён ✅")
+    if not files:
+        return await message.answer("Шаблонов пока нет.")
+
+    await message.answer("Шаблоны:\n" + "\n".join(files))
 
 
 @dp.message(Command("prices"))
@@ -161,34 +229,38 @@ async def update_prices(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    template = load_template()
-
-    if not template:
-        return await message.answer("Сначала сохрани шаблон через /template.")
-
     raw = message.text.replace("/prices", "", 1).strip()
 
     if not raw:
         return await message.answer(
             "Формат:\n\n"
-            "/prices\n"
+            "/prices iphone17\n"
             "iPhone 17 256GB Global Blue = 66600\n"
             "iPhone 17 256GB Global Sage = off"
         )
 
+    lines = raw.splitlines()
+    name = lines[0].strip()
+    price_lines = lines[1:]
+
+    template = load_template(name)
+
+    if not template:
+        return await message.answer("Такой шаблон не найден.")
+
     updated = template
     changed = 0
 
-    for line in raw.splitlines():
+    for line in price_lines:
         if "=" not in line:
             continue
 
-        name, price = line.split("=", 1)
-        name = name.strip()
+        product_name, price = line.split("=", 1)
+        product_name = product_name.strip()
         new_price = format_price(price)
 
         pattern = re.compile(
-            rf"(?m)(^.*?{re.escape(name)}.*?—\s*)([^<\n\r]+)"
+            rf"(?m)(.*?{re.escape(product_name)}.*?—\s*)([^<\n\r]+)"
         )
 
         updated, count = pattern.subn(
@@ -199,13 +271,18 @@ async def update_prices(message: Message):
 
         changed += count
 
-    save_template(updated)
-    await publish_to_channel(updated)
+    save_template(name, updated)
+    await publish_to_channel(name, updated)
 
-    await message.answer(f"Цены обновлены ✅\nИзменено строк: {changed}")
+    await message.answer(
+        f"Цены обновлены ✅\n"
+        f"Шаблон: <code>{name}</code>\n"
+        f"Изменено строк: {changed}"
+    )
 
 
 async def main():
+    ensure_dirs()
     print("Bot started")
     await dp.start_polling(bot)
 
