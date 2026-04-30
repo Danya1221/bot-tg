@@ -242,7 +242,7 @@ async def update_prices(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    raw = message.text.replace("/prices", "", 1).strip()
+    raw = message.html_text.replace("/template", "", 1).strip()
 
     if not raw:
         return await message.answer(
