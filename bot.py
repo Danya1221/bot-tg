@@ -11,6 +11,7 @@ from aiogram.enums import ParseMode
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
 CHANNEL_ID = "@Netizenshop"
 ADMIN_ID = 707131428
 
@@ -29,14 +30,15 @@ def is_admin(message: Message):
     return message.from_user and message.from_user.id == ADMIN_ID
 
 
-def save_template(html_text):
+def save_template(text):
     with open(TEMPLATE_FILE, "w", encoding="utf-8") as f:
-        f.write(html_text)
+        f.write(text)
 
 
 def load_template():
     if not os.path.exists(TEMPLATE_FILE):
         return None
+
     with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
         return f.read()
 
@@ -76,13 +78,19 @@ async def publish_to_channel(text):
             await bot.edit_message_text(
                 chat_id=CHANNEL_ID,
                 message_id=message_id,
-                text=text
+                text=text,
+                parse_mode=ParseMode.HTML
             )
             return
         except Exception as e:
             print("Edit error:", e)
 
-    msg = await bot.send_message(CHANNEL_ID, text)
+    msg = await bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=text,
+        parse_mode=ParseMode.HTML
+    )
+
     save_message_id(msg.message_id)
 
 
@@ -91,17 +99,20 @@ async def start(message: Message):
     await message.answer(
         "Бот работает ✅\n\n"
         "Команды:\n"
-        "/template — ответом на готовый прайс\n"
+        "/template + текст — сохранить шаблон\n"
         "/prices — обновить цены пачкой\n"
-        "/show — показать текущий шаблон\n"
-        "/update — отправить/обновить канал\n"
+        "/show — показать шаблон\n"
+        "/update — обновить канал\n"
         "/myid"
     )
 
 
 @dp.message(Command("myid"))
 async def myid(message: Message):
-    await message.answer(f"Твой Telegram ID: <code>{message.from_user.id}</code>")
+    await message.answer(
+        f"Твой Telegram ID: <code>{message.from_user.id}</code>",
+        parse_mode=ParseMode.HTML
+    )
 
 
 @dp.message(Command("template"))
@@ -109,15 +120,12 @@ async def set_template(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    if not message.reply_to_message:
-        return await message.answer("Ответь командой /template на сообщение с готовым прайсом.")
+    text = message.html_text.replace("/template", "", 1).strip()
 
-    html_text = message.reply_to_message.html_text
+    if not text:
+        return await message.answer("Пришли текст после команды /template")
 
-    if not html_text:
-        return await message.answer("Не вижу текст шаблона.")
-
-    save_template(html_text)
+    save_template(text)
     await message.answer("Шаблон сохранён ✅")
 
 
@@ -131,7 +139,7 @@ async def show_template(message: Message):
     if not template:
         return await message.answer("Шаблон ещё не сохранён.")
 
-    await message.answer(template)
+    await message.answer(template, parse_mode=ParseMode.HTML)
 
 
 @dp.message(Command("update"))
@@ -198,6 +206,7 @@ async def update_prices(message: Message):
 
 
 async def main():
+    print("Bot started")
     await dp.start_polling(bot)
 
 
