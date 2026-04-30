@@ -1,21 +1,20 @@
 import asyncio
 import json
 import os
+import re
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = "@Netizenshop"
-
 ADMIN_ID = 707131428
 
-DATA_FILE = "prices.json"
+TEMPLATE_FILE = "template.html"
 MESSAGE_FILE = "message.json"
 
 bot = Bot(
@@ -30,17 +29,21 @@ def is_admin(message: Message):
     return message.from_user and message.from_user.id == ADMIN_ID
 
 
-def load_data():
-    if not os.path.exists(DATA_FILE):
-        return []
-
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def save_template(html_text):
+    with open(TEMPLATE_FILE, "w", encoding="utf-8") as f:
+        f.write(html_text)
 
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def load_template():
+    if not os.path.exists(TEMPLATE_FILE):
+        return None
+    with open(TEMPLATE_FILE, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def save_message_id(message_id):
+    with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"message_id": message_id}, f)
 
 
 def load_message_id():
@@ -51,78 +54,47 @@ def load_message_id():
         return None
 
 
-def save_message_id(message_id):
-    with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
-        json.dump({"message_id": message_id}, f)
+def format_price(value):
+    value = value.strip().lower()
 
-
-def format_price(price):
-    if price is None:
+    if value in ["off", "нет", "no", "0", "-", "x"]:
         return "❌"
 
-    price = int(price)
-    return f"{price:,}".replace(",", ".") + "₽"
+    value = re.sub(r"\D", "", value)
+
+    if not value:
+        return "❌"
+
+    return f"{int(value):,}".replace(",", ".") + "₽"
 
 
-def build_price_text():
-    data = load_data()
-
-    if not data:
-        return "Прайс пока пуст."
-
-    text = ""
-
-    for category in data:
-        text += f"<b>{category['category']}</b>\n\n"
-
-        for item in category["items"]:
-            price = format_price(item["price"]) if item["available"] else "❌"
-            text += f"📱<code>{item['name']} — {price}</code>\n"
-
-        text += "\n━━━━━━━━━━━━━━\n\n"
-
-    text += (
-        "eSIM - только виртуальные\n\n"
-        "SIM+eSIM - физическая + виртуальная\n\n"
-        "🛒 Для заказа:\n"
-        "@netizenstaff"
-    )
-
-    return text
-
-
-async def update_channel_message():
-    text = build_price_text()
+async def publish_to_channel(text):
     message_id = load_message_id()
 
-    try:
-        if message_id:
+    if message_id:
+        try:
             await bot.edit_message_text(
                 chat_id=CHANNEL_ID,
                 message_id=message_id,
                 text=text
             )
-        else:
-            msg = await bot.send_message(CHANNEL_ID, text)
-            save_message_id(msg.message_id)
+            return
+        except Exception as e:
+            print("Edit error:", e)
 
-    except Exception:
-        msg = await bot.send_message(CHANNEL_ID, text)
-        save_message_id(msg.message_id)
+    msg = await bot.send_message(CHANNEL_ID, text)
+    save_message_id(msg.message_id)
 
 
 @dp.message(Command("start"))
 async def start(message: Message):
     await message.answer(
-        "Бот работает.\n\n"
+        "Бот работает ✅\n\n"
         "Команды:\n"
-        "/add категория | товар | цена\n"
-        "/price товар | цена\n"
-        "/off товар\n"
-        "/on товар\n"
-        "/delete товар\n"
-        "/list\n"
-        "/update\n"
+        "/template — ответом на готовый прайс\n"
+        "/prices — обновить цены пачкой\n"
+        "/show — показать текущий шаблон\n"
+        "/update — отправить/обновить канал\n"
         "/myid"
     )
 
@@ -132,165 +104,100 @@ async def myid(message: Message):
     await message.answer(f"Твой Telegram ID: <code>{message.from_user.id}</code>")
 
 
-@dp.message(Command("add"))
-async def add_item(message: Message):
+@dp.message(Command("template"))
+async def set_template(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    try:
-        text = message.text.replace("/add", "", 1).strip()
-        category, name, price = [x.strip() for x in text.split("|")]
+    if not message.reply_to_message:
+        return await message.answer("Ответь командой /template на сообщение с готовым прайсом.")
 
-        data = load_data()
+    html_text = message.reply_to_message.html_text
 
-        for cat in data:
-            if cat["category"] == category:
-                cat["items"].append({
-                    "name": name,
-                    "price": int(price),
-                    "available": True
-                })
-                break
-        else:
-            data.append({
-                "category": category,
-                "items": [
-                    {
-                        "name": name,
-                        "price": int(price),
-                        "available": True
-                    }
-                ]
-            })
+    if not html_text:
+        return await message.answer("Не вижу текст шаблона.")
 
-        save_data(data)
-        await update_channel_message()
-        await message.answer("Товар добавлен ✅")
-
-    except Exception:
-        await message.answer("Формат: /add категория | товар | цена")
+    save_template(html_text)
+    await message.answer("Шаблон сохранён ✅")
 
 
-@dp.message(Command("price"))
-async def change_price(message: Message):
+@dp.message(Command("show"))
+async def show_template(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    try:
-        text = message.text.replace("/price", "", 1).strip()
-        name, price = [x.strip() for x in text.split("|")]
+    template = load_template()
 
-        data = load_data()
-        found = False
+    if not template:
+        return await message.answer("Шаблон ещё не сохранён.")
 
-        for category in data:
-            for item in category["items"]:
-                if item["name"].lower() == name.lower():
-                    item["price"] = int(price)
-                    item["available"] = True
-                    found = True
-
-        save_data(data)
-        await update_channel_message()
-
-        await message.answer("Цена обновлена ✅" if found else "Товар не найден.")
-
-    except Exception:
-        await message.answer("Формат: /price товар | цена")
-
-
-@dp.message(Command("off"))
-async def off_item(message: Message):
-    if not is_admin(message):
-        return await message.answer("Нет доступа.")
-
-    name = message.text.replace("/off", "", 1).strip()
-    data = load_data()
-    found = False
-
-    for category in data:
-        for item in category["items"]:
-            if item["name"].lower() == name.lower():
-                item["available"] = False
-                found = True
-
-    save_data(data)
-    await update_channel_message()
-
-    await message.answer("Поставил ❌" if found else "Товар не найден.")
-
-
-@dp.message(Command("on"))
-async def on_item(message: Message):
-    if not is_admin(message):
-        return await message.answer("Нет доступа.")
-
-    name = message.text.replace("/on", "", 1).strip()
-    data = load_data()
-    found = False
-
-    for category in data:
-        for item in category["items"]:
-            if item["name"].lower() == name.lower():
-                item["available"] = True
-                found = True
-
-    save_data(data)
-    await update_channel_message()
-
-    await message.answer("Товар снова в наличии ✅" if found else "Товар не найден.")
-
-
-@dp.message(Command("delete"))
-async def delete_item(message: Message):
-    if not is_admin(message):
-        return await message.answer("Нет доступа.")
-
-    name = message.text.replace("/delete", "", 1).strip()
-    data = load_data()
-    found = False
-
-    for category in data:
-        before = len(category["items"])
-        category["items"] = [
-            item for item in category["items"]
-            if item["name"].lower() != name.lower()
-        ]
-
-        if len(category["items"]) != before:
-            found = True
-
-    data = [cat for cat in data if cat["items"]]
-
-    save_data(data)
-    await update_channel_message()
-
-    await message.answer("Товар удалён ✅" if found else "Товар не найден.")
-
-
-@dp.message(Command("list"))
-async def list_items(message: Message):
-    if not is_admin(message):
-        return await message.answer("Нет доступа.")
-
-    await message.answer(build_price_text())
+    await message.answer(template)
 
 
 @dp.message(Command("update"))
-async def manual_update(message: Message):
+async def update_channel(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    await update_channel_message()
-    await message.answer("Прайс обновлён ✅")
+    template = load_template()
+
+    if not template:
+        return await message.answer("Сначала сохрани шаблон через /template.")
+
+    await publish_to_channel(template)
+    await message.answer("Канал обновлён ✅")
+
+
+@dp.message(Command("prices"))
+async def update_prices(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    template = load_template()
+
+    if not template:
+        return await message.answer("Сначала сохрани шаблон через /template.")
+
+    raw = message.text.replace("/prices", "", 1).strip()
+
+    if not raw:
+        return await message.answer(
+            "Формат:\n\n"
+            "/prices\n"
+            "iPhone 17 256GB Global Blue = 66600\n"
+            "iPhone 17 256GB Global Sage = off"
+        )
+
+    updated = template
+    changed = 0
+
+    for line in raw.splitlines():
+        if "=" not in line:
+            continue
+
+        name, price = line.split("=", 1)
+        name = name.strip()
+        new_price = format_price(price)
+
+        pattern = re.compile(
+            rf"(?m)(^.*?{re.escape(name)}.*?—\s*)([^<\n\r]+)"
+        )
+
+        updated, count = pattern.subn(
+            rf"\g<1>{new_price}",
+            updated,
+            count=1
+        )
+
+        changed += count
+
+    save_template(updated)
+    await publish_to_channel(updated)
+
+    await message.answer(f"Цены обновлены ✅\nИзменено строк: {changed}")
 
 
 async def main():
-    scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(update_channel_message, "cron", hour=12, minute=0)
-    scheduler.start()
-
-    await update_channel_message()
     await dp.start_polling(bot)
 
 
