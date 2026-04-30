@@ -1,106 +1,98 @@
 import asyncio
 import json
 import os
-from collections import defaultdict
 
-import gspread
-from aiogram import Bot
+from aiogram import Bot, Dispatcher, F
+from aiogram.filters import Command
+from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from google.oauth2.service_account import Credentials
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")
-SHEET_URL = os.getenv("SHEET_URL")
-GOOGLE_JSON = os.getenv("GOOGLE_JSON")
+CHANNEL_ID = "@Netizenshop"
 
+ADMIN_ID = 123456789  # сюда потом вставишь свой Telegram ID
+
+DATA_FILE = "prices.json"
 MESSAGE_FILE = "message.json"
-
 
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
-
-def get_sheet_rows():
-    scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
-    creds = Credentials.from_service_account_info(
-        json.loads(GOOGLE_JSON),
-        scopes=scopes
-    )
-
-    client = gspread.authorize(creds)
-    sheet = client.open_by_url(SHEET_URL).sheet1
-    return sheet.get_all_records()
+dp = Dispatcher()
 
 
-def format_price(value):
-    if value is None or value == "":
-        return "❌"
-
-    try:
-        value = int(str(value).replace(" ", "").replace(".", "").replace(",", ""))
-        return f"{value:,}".replace(",", ".") + "₽"
-    except Exception:
-        return str(value)
+def is_admin(message: Message):
+    return message.from_user and message.from_user.id == ADMIN_ID
 
 
-def build_message(rows):
-    grouped = defaultdict(list)
+def load_data():
+    if not os.path.exists(DATA_FILE):
+        return []
 
-    for row in rows:
-        category = row.get("category", "").strip()
-        if not category:
-            continue
-        grouped[category].append(row)
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-    parts = []
 
-    for category, items in grouped.items():
-        parts.append(f"<b>{category}</b>\n")
-
-        for row in items:
-            title = str(row.get("title", "")).strip()
-            color = str(row.get("color", "")).strip()
-            available = str(row.get("available", "yes")).lower().strip()
-            price_raw = row.get("price", "")
-
-            price = "❌" if available in ["no", "нет", "0", "false"] else format_price(price_raw)
-
-            line = f"📱<code>{title} {color} — {price}</code>"
-            parts.append(line)
-
-        parts.append("\n━━━━━━━━━━━━━━\n")
-
-    parts.append(
-        "eSIM - только виртуальные (нет физического слота под сим)\n\n"
-        "SIM+eSIM - одна физическая сим карта + виртуальные\n\n"
-        "🛒 Для заказа:\n"
-        "@netizenstaff"
-    )
-
-    return "\n".join(parts)
+def save_data(data):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def load_message_id():
     try:
-        with open(MESSAGE_FILE, "r", encoding="utf-8") as file:
-            return json.load(file).get("message_id")
+        with open(MESSAGE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f).get("message_id")
     except Exception:
         return None
 
 
 def save_message_id(message_id):
-    with open(MESSAGE_FILE, "w", encoding="utf-8") as file:
-        json.dump({"message_id": message_id}, file)
+    with open(MESSAGE_FILE, "w", encoding="utf-8") as f:
+        json.dump({"message_id": message_id}, f)
 
 
-async def update_price_message():
-    rows = get_sheet_rows()
-    text = build_message(rows)
+def format_price(price):
+    if price is None:
+        return "❌"
+
+    price = int(price)
+    return f"{price:,}".replace(",", ".") + "₽"
+
+
+def build_price_text():
+    data = load_data()
+
+    if not data:
+        return "Прайс пока пуст."
+
+    text = ""
+
+    for category in data:
+        text += f"<b>{category['category']}</b>\n\n"
+
+        for item in category["items"]:
+            price = format_price(item["price"]) if item["available"] else "❌"
+            text += f"📱<code>{item['name']} — {price}</code>\n"
+
+        text += "\n━━━━━━━━━━━━━━\n\n"
+
+    text += (
+        "eSIM - только виртуальные\n\n"
+        "SIM+eSIM - физическая + виртуальная\n\n"
+        "🛒 Для заказа:\n"
+        "@netizenstaff"
+    )
+
+    return text
+
+
+async def update_channel_message():
+    text = build_price_text()
     message_id = load_message_id()
 
     try:
@@ -114,23 +106,192 @@ async def update_price_message():
             msg = await bot.send_message(CHANNEL_ID, text)
             save_message_id(msg.message_id)
 
-        print("Price message updated")
-
-    except Exception as e:
-        print("Error:", e)
+    except Exception:
         msg = await bot.send_message(CHANNEL_ID, text)
         save_message_id(msg.message_id)
 
 
-async def main():
-    await update_price_message()
+@dp.message(Command("start"))
+async def start(message: Message):
+    await message.answer(
+        "Бот работает.\n\n"
+        "Команды:\n"
+        "/add категория | товар | цена\n"
+        "/price товар | цена\n"
+        "/off товар\n"
+        "/on товар\n"
+        "/delete товар\n"
+        "/list\n"
+        "/update\n"
+        "/myid"
+    )
 
+
+@dp.message(Command("myid"))
+async def myid(message: Message):
+    await message.answer(f"Твой Telegram ID: <code>{message.from_user.id}</code>")
+
+
+@dp.message(Command("add"))
+async def add_item(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    try:
+        text = message.text.replace("/add", "", 1).strip()
+        category, name, price = [x.strip() for x in text.split("|")]
+
+        data = load_data()
+
+        for cat in data:
+            if cat["category"] == category:
+                cat["items"].append({
+                    "name": name,
+                    "price": int(price),
+                    "available": True
+                })
+                break
+        else:
+            data.append({
+                "category": category,
+                "items": [
+                    {
+                        "name": name,
+                        "price": int(price),
+                        "available": True
+                    }
+                ]
+            })
+
+        save_data(data)
+        await update_channel_message()
+        await message.answer("Товар добавлен ✅")
+
+    except Exception:
+        await message.answer("Формат: /add категория | товар | цена")
+
+
+@dp.message(Command("price"))
+async def change_price(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    try:
+        text = message.text.replace("/price", "", 1).strip()
+        name, price = [x.strip() for x in text.split("|")]
+
+        data = load_data()
+        found = False
+
+        for category in data:
+            for item in category["items"]:
+                if item["name"].lower() == name.lower():
+                    item["price"] = int(price)
+                    item["available"] = True
+                    found = True
+
+        save_data(data)
+        await update_channel_message()
+
+        await message.answer("Цена обновлена ✅" if found else "Товар не найден.")
+
+    except Exception:
+        await message.answer("Формат: /price товар | цена")
+
+
+@dp.message(Command("off"))
+async def off_item(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    name = message.text.replace("/off", "", 1).strip()
+    data = load_data()
+    found = False
+
+    for category in data:
+        for item in category["items"]:
+            if item["name"].lower() == name.lower():
+                item["available"] = False
+                found = True
+
+    save_data(data)
+    await update_channel_message()
+
+    await message.answer("Поставил ❌" if found else "Товар не найден.")
+
+
+@dp.message(Command("on"))
+async def on_item(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    name = message.text.replace("/on", "", 1).strip()
+    data = load_data()
+    found = False
+
+    for category in data:
+        for item in category["items"]:
+            if item["name"].lower() == name.lower():
+                item["available"] = True
+                found = True
+
+    save_data(data)
+    await update_channel_message()
+
+    await message.answer("Товар снова в наличии ✅" if found else "Товар не найден.")
+
+
+@dp.message(Command("delete"))
+async def delete_item(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    name = message.text.replace("/delete", "", 1).strip()
+    data = load_data()
+    found = False
+
+    for category in data:
+        before = len(category["items"])
+        category["items"] = [
+            item for item in category["items"]
+            if item["name"].lower() != name.lower()
+        ]
+
+        if len(category["items"]) != before:
+            found = True
+
+    data = [cat for cat in data if cat["items"]]
+
+    save_data(data)
+    await update_channel_message()
+
+    await message.answer("Товар удалён ✅" if found else "Товар не найден.")
+
+
+@dp.message(Command("list"))
+async def list_items(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    await message.answer(build_price_text())
+
+
+@dp.message(Command("update"))
+async def manual_update(message: Message):
+    if not is_admin(message):
+        return await message.answer("Нет доступа.")
+
+    await update_channel_message()
+    await message.answer("Прайс обновлён ✅")
+
+
+async def main():
     scheduler = AsyncIOScheduler(timezone="Europe/Moscow")
-    scheduler.add_job(update_price_message, "cron", hour=12, minute=0)
+    scheduler.add_job(update_channel_message, "cron", hour=12, minute=0)
     scheduler.start()
 
-    while True:
-        await asyncio.sleep(3600)
+    await update_channel_message()
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
