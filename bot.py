@@ -13,7 +13,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = "@Netizenshop"
 
-ADMIN_ID = 0  # сюда потом вставишь свой Telegram ID
+ADMIN_ID = 707131428  # сюда потом вставишь свой Telegram ID
 
 DATA_FILE = "prices.json"
 MESSAGE_FILE = "message.json"
