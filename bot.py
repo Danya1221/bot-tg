@@ -47,7 +47,6 @@ def save_template(name, text):
 
 def load_template(name):
     path = template_path(name)
-
     if not os.path.exists(path):
         return None
 
@@ -69,8 +68,7 @@ def save_messages(data):
 
 
 def get_message_id(name):
-    data = load_messages()
-    return data.get(name)
+    return load_messages().get(name)
 
 
 def save_message_id(name, message_id):
@@ -96,22 +94,24 @@ def format_price(value):
 async def publish_to_channel(name, text):
     message_id = get_message_id(name)
 
-    try:
-        if message_id:
+    if message_id:
+        try:
             await bot.edit_message_text(
                 chat_id=CHANNEL_ID,
                 message_id=message_id,
                 text=text,
-                parse_mode="HTML"
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
             )
             return
-    except Exception as e:
-        print("Edit error:", e)
+        except Exception as e:
+            print("Edit error:", e)
 
     msg = await bot.send_message(
         chat_id=CHANNEL_ID,
         text=text,
-        parse_mode="HTML"
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True
     )
 
     save_message_id(name, msg.message_id)
@@ -127,7 +127,8 @@ async def start(message: Message):
         "/prices имя — обновить цены\n"
         "/show имя — показать шаблон\n"
         "/templates — список шаблонов\n"
-        "/myid"
+        "/myid",
+        parse_mode=ParseMode.HTML
     )
 
 
@@ -135,7 +136,7 @@ async def start(message: Message):
 async def myid(message: Message):
     await message.answer(
         f"Твой Telegram ID: <code>{message.from_user.id}</code>",
-        parse_mode="HTML"
+        parse_mode=ParseMode.HTML
     )
 
 
@@ -144,7 +145,7 @@ async def set_template(message: Message):
     if not is_admin(message):
         return await message.answer("Нет доступа.")
 
-    raw = message.html_text.replace("/template", "", 1).strip()
+    raw = message.text.replace("/template", "", 1).strip()
 
     if not raw:
         return await message.answer(
@@ -155,7 +156,6 @@ async def set_template(message: Message):
 
     lines = raw.splitlines()
     name = lines[0].strip()
-
     text = "\n".join(lines[1:]).strip()
 
     if not name or not text:
@@ -166,7 +166,11 @@ async def set_template(message: Message):
         )
 
     save_template(name, text)
-    await message.answer(f"Шаблон <code>{name}</code> сохранён ✅", parse_mode="HTML")
+
+    await message.answer(
+        f"Шаблон <code>{name}</code> сохранён ✅",
+        parse_mode=ParseMode.HTML
+    )
 
 
 @dp.message(Command("update"))
@@ -185,7 +189,11 @@ async def update_template(message: Message):
         return await message.answer("Такой шаблон не найден.")
 
     await publish_to_channel(name, template)
-    await message.answer(f"Пост <code>{name}</code> обновлён ✅", parse_mode="HTML")
+
+    await message.answer(
+        f"Пост <code>{name}</code> обновлён ✅",
+        parse_mode=ParseMode.HTML
+    )
 
 
 @dp.message(Command("show"))
@@ -203,7 +211,11 @@ async def show_template(message: Message):
     if not template:
         return await message.answer("Такой шаблон не найден.")
 
-    await message.answer(template, parse_mode="HTML")
+    await message.answer(
+        template,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True
+    )
 
 
 @dp.message(Command("templates"))
@@ -279,7 +291,7 @@ async def update_prices(message: Message):
         f"Цены обновлены ✅\n"
         f"Шаблон: <code>{name}</code>\n"
         f"Изменено строк: {changed}",
-        parse_mode="HTML"
+        parse_mode=ParseMode.HTML
     )
 
 
